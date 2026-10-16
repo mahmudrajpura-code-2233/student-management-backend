@@ -79,6 +79,34 @@ def root():
     }
 
 
+@app.get("/setup-admin")
+def setup_admin():
+    from .database import SessionLocal
+    from .models import User, UserRole
+    from .auth import get_password_hash
+    try:
+        with SessionLocal() as db:
+            admin = db.query(User).filter(User.username == "admin").first()
+            if not admin:
+                db.add(User(
+                    username="admin",
+                    email="admin@school.com",
+                    hashed_password=get_password_hash("admin123"),
+                    role=UserRole.ADMIN,
+                    is_active=True
+                ))
+                db.commit()
+                return {"status": "success", "message": "Admin user created: admin / admin123"}
+            else:
+                admin.hashed_password = get_password_hash("admin123")
+                admin.is_active = True
+                db.commit()
+                return {"status": "success", "message": "Admin user password reset to: admin123"}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+
+
 # ------------------------------------------------------------
 # Database connection test
 # ------------------------------------------------------------
