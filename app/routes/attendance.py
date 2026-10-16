@@ -1,25 +1,6 @@
-# ============================================================
-# ATTENDANCE ROUTES
-# ============================================================
-#
-# Is file mein Student Attendance Management ke saare
-# API endpoints hain.
-#
-# Features:
-# 1. Create attendance
-# 2. Get all attendance
-# 3. Get attendance by student
-# 4. Get attendance by date
-# 5. Get attendance by date range
-# 6. Get student attendance summary
-# 7. Update attendance
-# 8. Delete attendance
-# ============================================================
-
-
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -27,13 +8,12 @@ from ..models import Attendance, Student
 from ..schemas import (
     AttendanceCreate,
     AttendanceResponse,
+    AttendanceSummaryResponse,
+    AttendanceDetailResponse,
     AttendanceUpdate,
+    BulkAttendanceCreate,
+    BulkAttendanceResponse,
 )
-
-
-# ============================================================
-# ROUTER
-# ============================================================
 
 router = APIRouter(
     prefix="/attendance",
@@ -42,7 +22,8 @@ router = APIRouter(
 
 
 # ============================================================
-# 1. CREATE ATTENDANCE
+# 1. CREATE SINGLE ATTENDANCE
+# POST /attendance/
 # ============================================================
 
 @router.post(
@@ -50,30 +31,12 @@ router = APIRouter(
     response_model=AttendanceResponse
 )
 def create_attendance(
-    attendance: AttendanceCreate,
+    attendance_data: AttendanceCreate,
     db: Session = Depends(get_db)
 ):
-    """
-    Student ki attendance create karta hai.
-
-    Rules:
-    - Student exist karna chahiye.
-    - Student active hona chahiye.
-    - Future date allowed nahi hai.
-    - Ek student ki ek date par sirf ek attendance.
-    """
-
-    # --------------------------------------------------------
-    # CHECK STUDENT
-    # --------------------------------------------------------
-
-    student = (
-        db.query(Student)
-        .filter(
-            Student.id == attendance.student_id
-        )
-        .first()
-    )
+    student = db.query(Student).filter(
+        Student.id == attendance_data.student_id
+    ).first()
 
     if not student:
         raise HTTPException(
@@ -81,60 +44,42 @@ def create_attendance(
             detail="Student not found"
         )
 
-    # --------------------------------------------------------
-    # CHECK ACTIVE STUDENT
-    # --------------------------------------------------------
-
     if not student.is_active:
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Cannot mark attendance for "
-                "an inactive student"
-            )
+            detail="Student is not active"
         )
 
-    # --------------------------------------------------------
-    # CHECK DUPLICATE ATTENDANCE
-    # --------------------------------------------------------
+    existing = db.query(Attendance).filter(
+        Attendance.student_id == attendance_data.student_id,
+        Attendance.attendance_date == attendance_data.attendance_date
+    ).first()
 
-    existing_attendance = (
-        db.query(Attendance)
-        .filter(
-            Attendance.student_id
-            == attendance.student_id,
-            Attendance.attendance_date
-            == attendance.attendance_date
-        )
-        .first()
-    )
-
-    if existing_attendance:
+    if existing:
         raise HTTPException(
             status_code=400,
-            detail="Attendance already marked for this date"
+            detail="Attendance already exists for this student on this date"
         )
 
-    # --------------------------------------------------------
-    # CREATE ATTENDANCE
-    # --------------------------------------------------------
-
-    new_attendance = Attendance(
-        student_id=attendance.student_id,
-        attendance_date=attendance.attendance_date,
-        status=attendance.status,
-        remarks=attendance.remarks,
+    attendance = Attendance(
+        student_id=attendance_data.student_id,
+        attendance_date=attendance_data.attendance_date,
+        status=attendance_data.status.value,
+        remarks=attendance_data.remarks,
     )
 
-    db.add(new_attendance)
-    db.commit()
-    db.refresh(new_attendance)
+    db.add(attendance)
 
-    return new_attendance
+    db.commit()
+
+    db.refresh(attendance)
+
+    return attendance
 
 
 # ============================================================
-# 2. GET ALL ATTENDANCE
+# 2. GET ATTENDANCE
+# GET /attendance/
 # ============================================================
 
 @router.get(
@@ -142,74 +87,50 @@ def create_attendance(
     response_model=list[AttendanceResponse]
 )
 def get_attendance(
+    student_id: int | None = Query(default=None),
+    attendance_date: date | None = Query(default=None),
+    status: str | None = Query(default=None),
     db: Session = Depends(get_db)
 ):
-    """
-    Saare attendance records return karta hai.
+    query = db.query(Attendance)
 
-    Latest date pehle aayegi.
-    """
-
-    return (
-        db.query(Attendance)
-        .order_by(
-            Attendance.attendance_date.desc()
+    if student_id is not None:
+        query = query.filter(
+            Attendance.student_id == student_id
         )
-        .all()
-    )
+
+    if attendance_date is not None:
+        query = query.filter(
+            Attendance.attendance_date == attendance_date
+        )
+
+    if status is not None:
+        query = query.filter(
+            Attendance.status == status
+        )
+
+    return query.order_by(
+        Attendance.attendance_date.desc(),
+        Attendance.id.desc()
+    ).all()
 
 
 # ============================================================
-# 3. GET ATTENDANCE SUMMARY
-# ============================================================
-#
-# IMPORTANT:
-# Ye route generic:
-#
-# /student/{student_id}
-#
-# se PEHLE hona chahiye.
-#
-# Isse:
-# /attendance/student/1/summary
-#
-# correctly match hoga.
+# 3. STUDENT ATTENDANCE SUMMARY
+# GET /attendance/student/{student_id}/summary
 # ============================================================
 
 @router.get(
-    "/student/{student_id}/summary"
+    "/student/{student_id}/summary",
+    response_model=AttendanceSummaryResponse
 )
-def attendance_summary(
+def get_student_attendance_summary(
     student_id: int,
     db: Session = Depends(get_db)
 ):
-    """
-    Student ki attendance summary return karta hai.
-
-    Example response:
-
-    {
-        "student_id": 1,
-        "total_days": 10,
-        "present": 8,
-        "absent": 1,
-        "late": 1,
-        "leave": 0,
-        "attendance_percentage": 80.0
-    }
-    """
-
-    # --------------------------------------------------------
-    # CHECK STUDENT
-    # --------------------------------------------------------
-
-    student = (
-        db.query(Student)
-        .filter(
-            Student.id == student_id
-        )
-        .first()
-    )
+    student = db.query(Student).filter(
+        Student.id == student_id
+    ).first()
 
     if not student:
         raise HTTPException(
@@ -217,27 +138,330 @@ def attendance_summary(
             detail="Student not found"
         )
 
-    # --------------------------------------------------------
-    # GET ATTENDANCE RECORDS
-    # --------------------------------------------------------
-
-    records = (
-        db.query(Attendance)
-        .filter(
-            Attendance.student_id == student_id
-        )
-        .all()
-    )
-
-    # --------------------------------------------------------
-    # TOTAL DAYS
-    # --------------------------------------------------------
+    records = db.query(Attendance).filter(
+        Attendance.student_id == student_id
+    ).all()
 
     total_days = len(records)
 
-    # --------------------------------------------------------
-    # COUNT PRESENT
-    # --------------------------------------------------------
+    present_days = sum(
+        1
+        for record in records
+        if record.status == "Present"
+    )
+
+    absent_days = sum(
+        1
+        for record in records
+        if record.status == "Absent"
+    )
+
+    late_days = sum(
+        1
+        for record in records
+        if record.status == "Late"
+    )
+
+    leave_days = sum(
+        1
+        for record in records
+        if record.status == "Leave"
+    )
+
+    attendance_percentage = (
+        (present_days / total_days) * 100
+        if total_days > 0
+        else 0
+    )
+
+    return AttendanceSummaryResponse(
+        student_id=student_id,
+        student_name=student.name,
+        total_days=total_days,
+        present_days=present_days,
+        absent_days=absent_days,
+        late_days=late_days,
+        leave_days=leave_days,
+        attendance_percentage=attendance_percentage,
+    )
+
+
+# ============================================================
+# 4. STUDENT ATTENDANCE HISTORY
+# GET /attendance/student/{student_id}
+# ============================================================
+
+@router.get(
+    "/student/{student_id}",
+    response_model=list[AttendanceResponse]
+)
+def get_student_attendance_history(
+    student_id: int,
+    db: Session = Depends(get_db)
+):
+    student = db.query(Student).filter(
+        Student.id == student_id
+    ).first()
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail="Student not found"
+        )
+
+    return db.query(Attendance).filter(
+        Attendance.student_id == student_id
+    ).order_by(
+        Attendance.attendance_date.desc(),
+        Attendance.id.desc()
+    ).all()
+
+
+# ============================================================
+# 5. ATTENDANCE BY DATE
+# GET /attendance/date/{attendance_date}
+# ============================================================
+
+@router.get(
+    "/date/{attendance_date}",
+    response_model=list[AttendanceDetailResponse]
+)
+def get_attendance_by_date(
+    attendance_date: date,
+    class_id: int | None = Query(default=None),
+    section_id: int | None = Query(default=None),
+    db: Session = Depends(get_db)
+):
+    query = (
+        db.query(Attendance, Student)
+        .join(
+            Student,
+            Attendance.student_id == Student.id
+        )
+        .filter(
+            Attendance.attendance_date == attendance_date
+        )
+    )
+
+    if class_id is not None:
+        query = query.filter(Student.class_id == class_id)
+
+    if section_id is not None:
+        query = query.filter(Student.section_id == section_id)
+
+    results = query.order_by(Student.id).all()
+
+    response = []
+
+    for attendance, student in results:
+
+        response.append(
+            AttendanceDetailResponse(
+                id=attendance.id,
+                student_id=attendance.student_id,
+                attendance_date=attendance.attendance_date,
+                status=attendance.status,
+                remarks=attendance.remarks,
+                created_at=attendance.created_at,
+                student_code=student.student_code,
+                student_name=student.name,
+            )
+        )
+
+    return response
+
+
+# ============================================================
+# 6. ATTENDANCE RANGE
+# GET /attendance/range
+# ============================================================
+
+@router.get(
+    "/range",
+    response_model=list[AttendanceDetailResponse]
+)
+def get_attendance_range(
+    start_date: date,
+    end_date: date,
+    student_id: int | None = Query(default=None),
+    class_id: int | None = Query(default=None),
+    section_id: int | None = Query(default=None),
+    db: Session = Depends(get_db)
+):
+    if start_date > end_date:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date cannot be greater than end_date"
+        )
+
+    query = (
+        db.query(Attendance, Student)
+        .join(
+            Student,
+            Attendance.student_id == Student.id
+        )
+        .filter(
+            Attendance.attendance_date >= start_date,
+            Attendance.attendance_date <= end_date
+        )
+    )
+
+    if student_id is not None:
+        query = query.filter(
+            Attendance.student_id == student_id
+        )
+
+    if class_id is not None:
+        query = query.filter(Student.class_id == class_id)
+
+    if section_id is not None:
+        query = query.filter(Student.section_id == section_id)
+
+    results = query.order_by(
+        Attendance.attendance_date.desc(),
+        Attendance.id.desc()
+    ).all()
+
+    response = []
+
+    for attendance, student in results:
+
+        response.append(
+            AttendanceDetailResponse(
+                id=attendance.id,
+                student_id=attendance.student_id,
+                attendance_date=attendance.attendance_date,
+                status=attendance.status,
+                remarks=attendance.remarks,
+                created_at=attendance.created_at,
+                student_code=student.student_code,
+                student_name=student.name,
+            )
+        )
+
+    return response
+
+
+# ============================================================
+# 7. BULK ATTENDANCE
+# POST /attendance/bulk
+# ============================================================
+
+@router.post(
+    "/bulk",
+    response_model=BulkAttendanceResponse
+)
+def create_bulk_attendance(
+    attendance_data: BulkAttendanceCreate,
+    db: Session = Depends(get_db)
+):
+    student_ids = [
+        item.student_id
+        for item in attendance_data.records
+    ]
+
+    # Same student repeated in same request
+    if len(student_ids) != len(set(student_ids)):
+        raise HTTPException(
+            status_code=400,
+            detail="Duplicate student_id found in request"
+        )
+
+    created_records = []
+
+    for item in attendance_data.records:
+
+        student = db.query(Student).filter(
+            Student.id == item.student_id
+        ).first()
+
+        if not student:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Student {item.student_id} not found"
+            )
+
+        if not student.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Student {item.student_id} is not active"
+            )
+
+        existing = db.query(Attendance).filter(
+            Attendance.student_id == item.student_id,
+            Attendance.attendance_date == attendance_data.attendance_date
+        ).first()
+
+        # Already exists -> skip
+        if existing:
+            continue
+
+        attendance = Attendance(
+            student_id=item.student_id,
+            attendance_date=attendance_data.attendance_date,
+            status=item.status.value,
+            remarks=item.remarks,
+        )
+
+        db.add(attendance)
+
+        created_records.append(attendance)
+
+    db.commit()
+
+    for attendance in created_records:
+        db.refresh(attendance)
+
+    return BulkAttendanceResponse(
+        message="Bulk attendance processed successfully",
+        successful_records=len(created_records),
+        failed_records=len(attendance_data.records) - len(created_records),
+    )
+
+
+# ============================================================
+# 8. CLASS ATTENDANCE SUMMARY
+# GET /attendance/class/{class_id}/summary
+# ============================================================
+
+@router.get(
+    "/class/{class_id}/summary"
+)
+def get_class_attendance_summary(
+    class_id: int,
+    attendance_date: date,
+    db: Session = Depends(get_db)
+):
+    students = db.query(Student).filter(
+        Student.class_id == class_id,
+        Student.is_active == True
+    ).all()
+
+    total_students = len(students)
+
+    if total_students == 0:
+
+        return {
+            "class_id": class_id,
+            "attendance_date": attendance_date,
+            "total_students": 0,
+            "marked_students": 0,
+            "present": 0,
+            "absent": 0,
+            "late": 0,
+            "leave": 0,
+            "attendance_percentage": 0,
+        }
+
+    student_ids = [
+        student.id
+        for student in students
+    ]
+
+    records = db.query(Attendance).filter(
+        Attendance.student_id.in_(student_ids),
+        Attendance.attendance_date == attendance_date
+    ).all()
 
     present = sum(
         1
@@ -245,19 +469,11 @@ def attendance_summary(
         if record.status == "Present"
     )
 
-    # --------------------------------------------------------
-    # COUNT ABSENT
-    # --------------------------------------------------------
-
     absent = sum(
         1
         for record in records
         if record.status == "Absent"
     )
-
-    # --------------------------------------------------------
-    # COUNT LATE
-    # --------------------------------------------------------
 
     late = sum(
         1
@@ -265,192 +481,36 @@ def attendance_summary(
         if record.status == "Late"
     )
 
-    # --------------------------------------------------------
-    # COUNT LEAVE
-    # --------------------------------------------------------
-
     leave = sum(
         1
         for record in records
         if record.status == "Leave"
     )
 
-    # --------------------------------------------------------
-    # ATTENDANCE PERCENTAGE
-    # --------------------------------------------------------
-    #
-    # Current rule:
-    #
-    # Present / Total attendance records * 100
-    #
-    # School ke final attendance rules hum baad mein
-    # customize kar sakte hain.
-    # --------------------------------------------------------
+    marked_students = len(records)
 
     attendance_percentage = (
-        (present / total_days) * 100
-        if total_days > 0
+        (present / marked_students) * 100
+        if marked_students > 0
         else 0
     )
 
-    # --------------------------------------------------------
-    # RESPONSE
-    # --------------------------------------------------------
-
     return {
-        "student_id": student_id,
-        "total_days": total_days,
+        "class_id": class_id,
+        "attendance_date": attendance_date,
+        "total_students": total_students,
+        "marked_students": marked_students,
         "present": present,
         "absent": absent,
         "late": late,
         "leave": leave,
-        "attendance_percentage": round(
-            attendance_percentage,
-            2
-        ),
+        "attendance_percentage": attendance_percentage,
     }
 
 
 # ============================================================
-# 4. GET STUDENT ATTENDANCE
-# ============================================================
-
-@router.get(
-    "/student/{student_id}",
-    response_model=list[AttendanceResponse]
-)
-def get_student_attendance(
-    student_id: int,
-    db: Session = Depends(get_db)
-):
-    """
-    Ek student ki complete attendance history return karta hai.
-    """
-
-    # --------------------------------------------------------
-    # CHECK STUDENT
-    # --------------------------------------------------------
-
-    student = (
-        db.query(Student)
-        .filter(
-            Student.id == student_id
-        )
-        .first()
-    )
-
-    if not student:
-        raise HTTPException(
-            status_code=404,
-            detail="Student not found"
-        )
-
-    # --------------------------------------------------------
-    # GET ATTENDANCE
-    # --------------------------------------------------------
-
-    attendance_records = (
-        db.query(Attendance)
-        .filter(
-            Attendance.student_id == student_id
-        )
-        .order_by(
-            Attendance.attendance_date.desc()
-        )
-        .all()
-    )
-
-    return attendance_records
-
-
-# ============================================================
-# 5. GET ATTENDANCE BY DATE
-# ============================================================
-
-@router.get(
-    "/date/{attendance_date}",
-    response_model=list[AttendanceResponse]
-)
-def get_attendance_by_date(
-    attendance_date: date,
-    db: Session = Depends(get_db)
-):
-    """
-    Particular date ki attendance return karta hai.
-
-    Example:
-
-    /attendance/date/2026-10-05
-    """
-
-    attendance_records = (
-        db.query(Attendance)
-        .filter(
-            Attendance.attendance_date
-            == attendance_date
-        )
-        .all()
-    )
-
-    return attendance_records
-
-
-# ============================================================
-# 6. GET ATTENDANCE BY DATE RANGE
-# ============================================================
-
-@router.get(
-    "/range",
-    response_model=list[AttendanceResponse]
-)
-def get_attendance_by_range(
-    start_date: date,
-    end_date: date,
-    db: Session = Depends(get_db)
-):
-    """
-    Do dates ke beech attendance return karta hai.
-
-    Example:
-
-    /attendance/range
-    ?start_date=2026-10-01
-    &end_date=2026-10-05
-    """
-
-    # --------------------------------------------------------
-    # VALIDATE DATE RANGE
-    # --------------------------------------------------------
-
-    if start_date > end_date:
-        raise HTTPException(
-            status_code=400,
-            detail="start_date cannot be greater than end_date"
-        )
-
-    # --------------------------------------------------------
-    # GET RECORDS
-    # --------------------------------------------------------
-
-    attendance_records = (
-        db.query(Attendance)
-        .filter(
-            Attendance.attendance_date
-            >= start_date,
-            Attendance.attendance_date
-            <= end_date
-        )
-        .order_by(
-            Attendance.attendance_date.asc()
-        )
-        .all()
-    )
-
-    return attendance_records
-
-
-# ============================================================
-# 7. UPDATE ATTENDANCE
+# 9. UPDATE ATTENDANCE
+# PUT /attendance/{attendance_id}
 # ============================================================
 
 @router.put(
@@ -459,94 +519,70 @@ def get_attendance_by_range(
 )
 def update_attendance(
     attendance_id: int,
-    attendance: AttendanceUpdate,
+    attendance_data: AttendanceUpdate,
     db: Session = Depends(get_db)
 ):
-    """
-    Existing attendance update karta hai.
+    attendance = db.query(Attendance).filter(
+        Attendance.id == attendance_id
+    ).first()
 
-    Student change nahi kiya ja sakta.
-    Sirf:
-    - attendance_date
-    - status
-    - remarks
-    update honge.
-    """
-
-    # --------------------------------------------------------
-    # FIND ATTENDANCE
-    # --------------------------------------------------------
-
-    existing_attendance = (
-        db.query(Attendance)
-        .filter(
-            Attendance.id == attendance_id
-        )
-        .first()
-    )
-
-    if not existing_attendance:
+    if not attendance:
         raise HTTPException(
             status_code=404,
             detail="Attendance not found"
         )
 
     # --------------------------------------------------------
-    # CHECK DUPLICATE DATE
-    # --------------------------------------------------------
-    #
-    # Same student ki same date par doosri attendance
-    # allowed nahi hai.
+    # New values
     # --------------------------------------------------------
 
-    duplicate_attendance = (
-        db.query(Attendance)
-        .filter(
-            Attendance.student_id
-            == existing_attendance.student_id,
+    new_date = (
+        attendance_data.attendance_date
+        if attendance_data.attendance_date is not None
+        else attendance.attendance_date
+    )
 
-            Attendance.attendance_date
-            == attendance.attendance_date,
+    # --------------------------------------------------------
+    # Duplicate check
+    # --------------------------------------------------------
 
+    if new_date != attendance.attendance_date:
+
+        existing = db.query(Attendance).filter(
+            Attendance.student_id == attendance.student_id,
+            Attendance.attendance_date == new_date,
             Attendance.id != attendance_id
-        )
-        .first()
-    )
+        ).first()
 
-    if duplicate_attendance:
-        raise HTTPException(
-            status_code=400,
-            detail="Attendance already exists for this date"
-        )
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail="Attendance already exists for this student on this date"
+            )
 
     # --------------------------------------------------------
-    # UPDATE
+    # Update fields
     # --------------------------------------------------------
 
-    existing_attendance.attendance_date = (
-        attendance.attendance_date
-    )
+    if attendance_data.attendance_date is not None:
+        attendance.attendance_date = attendance_data.attendance_date
 
-    existing_attendance.status = (
-        attendance.status
-    )
+    if attendance_data.status is not None:
+        attendance.status = attendance_data.status.value
 
-    existing_attendance.remarks = (
-        attendance.remarks
-    )
-
-    # --------------------------------------------------------
-    # SAVE
-    # --------------------------------------------------------
+    if attendance_data.remarks is not None:
+        attendance.remarks = attendance_data.remarks
 
     db.commit()
-    db.refresh(existing_attendance)
 
-    return existing_attendance
+    db.refresh(attendance)
+
+    return attendance
 
 
 # ============================================================
-# 8. DELETE ATTENDANCE
+# 10. DELETE ATTENDANCE
+# DELETE /attendance/{attendance_id}
 # ============================================================
 
 @router.delete(
@@ -556,37 +592,18 @@ def delete_attendance(
     attendance_id: int,
     db: Session = Depends(get_db)
 ):
-    """
-    Attendance record permanently delete karta hai.
+    attendance = db.query(Attendance).filter(
+        Attendance.id == attendance_id
+    ).first()
 
-    NOTE:
-    Production version mein hum later audit/soft-delete
-    approach consider kar sakte hain.
-    """
-
-    # --------------------------------------------------------
-    # FIND ATTENDANCE
-    # --------------------------------------------------------
-
-    existing_attendance = (
-        db.query(Attendance)
-        .filter(
-            Attendance.id == attendance_id
-        )
-        .first()
-    )
-
-    if not existing_attendance:
+    if not attendance:
         raise HTTPException(
             status_code=404,
             detail="Attendance not found"
         )
 
-    # --------------------------------------------------------
-    # DELETE
-    # --------------------------------------------------------
+    db.delete(attendance)
 
-    db.delete(existing_attendance)
     db.commit()
 
     return {

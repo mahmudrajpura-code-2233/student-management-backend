@@ -184,6 +184,48 @@ def get_sections(
 
 
 # ============================================================
+# GET SECTIONS BY CLASS
+# ============================================================
+
+@router.get(
+    "/class/{class_id}",
+    response_model=list[SectionResponse]
+)
+def get_sections_by_class(
+    class_id: int,
+    db: Session = Depends(get_db)
+):
+
+    school_class = (
+        db.query(SchoolClass)
+        .filter(
+            SchoolClass.id == class_id
+        )
+        .first()
+    )
+
+    if not school_class:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Class not found"
+        )
+
+    sections = (
+        db.query(Section)
+        .filter(
+            Section.class_id == class_id
+        )
+        .order_by(
+            asc(Section.name)
+        )
+        .all()
+    )
+
+    return sections
+
+
+# ============================================================
 # GET SINGLE SECTION
 # ============================================================
 
@@ -309,14 +351,50 @@ def deactivate_section(
 
 
 # ============================================================
+# DELETE SECTION
+# ============================================================
+
+@router.delete(
+    "/{section_id}"
+)
+def delete_section(
+    section_id: int,
+    db: Session = Depends(get_db)
+):
+
+    existing_section = (
+        db.query(Section)
+        .filter(
+            Section.id == section_id
+        )
+        .first()
+    )
+
+    if not existing_section:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Section not found"
+        )
+
+    db.delete(existing_section)
+    db.commit()
+
+    return {
+        "message": "Section deleted successfully",
+        "section_id": section_id
+    }
+
+
+# ============================================================
 # REACTIVATE SECTION
 # ============================================================
 
 @router.patch(
-    "/{section_id}/reactivate",
+    "/{section_id}/activate",
     response_model=SectionResponse
 )
-def reactivate_section(
+def activate_section(
     section_id: int,
     db: Session = Depends(get_db)
 ):

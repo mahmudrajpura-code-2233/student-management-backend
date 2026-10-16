@@ -29,25 +29,31 @@ DB_NAME = os.getenv("DB_NAME")
 # CHECK REQUIRED DATABASE SETTINGS
 # ============================================================
 
-if not DB_USER:
-    raise RuntimeError("DB_USER is missing in .env")
-
-if not DB_PASSWORD:
-    raise RuntimeError("DB_PASSWORD is missing in .env")
-
-if not DB_NAME:
-    raise RuntimeError("DB_NAME is missing in .env")
-
-
 # ============================================================
 # DATABASE URL
 # ============================================================
 
-DATABASE_URL = (
-    f"postgresql+psycopg://"
-    f"{DB_USER}:{DB_PASSWORD}@"
-    f"{DB_HOST}:{DB_PORT}/{DB_NAME}"
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL:
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+pg8000://", 1)
+    elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+"):
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+pg8000://", 1)
+else:
+    if not DB_USER:
+        raise RuntimeError("DB_USER or DATABASE_URL is missing in environment")
+    if not DB_PASSWORD:
+        raise RuntimeError("DB_PASSWORD is missing in environment")
+    if not DB_NAME:
+        raise RuntimeError("DB_NAME is missing in environment")
+
+    DATABASE_URL = (
+        f"postgresql+pg8000://"
+        f"{DB_USER}:{DB_PASSWORD}@"
+        f"{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    )
+
 
 
 # ============================================================

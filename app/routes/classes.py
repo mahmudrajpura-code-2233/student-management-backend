@@ -249,14 +249,50 @@ def deactivate_class(
 
 
 # ============================================================
+# DELETE CLASS
+# ============================================================
+
+@router.delete(
+    "/{class_id}"
+)
+def delete_class(
+    class_id: int,
+    db: Session = Depends(get_db)
+):
+
+    existing_class = (
+        db.query(SchoolClass)
+        .filter(
+            SchoolClass.id == class_id
+        )
+        .first()
+    )
+
+    if not existing_class:
+
+        raise HTTPException(
+            status_code=404,
+            detail="Class not found"
+        )
+
+    db.delete(existing_class)
+    db.commit()
+
+    return {
+        "message": "Class deleted successfully",
+        "class_id": class_id
+    }
+
+
+# ============================================================
 # REACTIVATE CLASS
 # ============================================================
 
 @router.patch(
-    "/{class_id}/reactivate",
+    "/{class_id}/activate",
     response_model=SchoolClassResponse
 )
-def reactivate_class(
+def activate_class(
     class_id: int,
     db: Session = Depends(get_db)
 ):
