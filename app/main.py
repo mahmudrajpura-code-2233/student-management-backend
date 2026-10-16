@@ -39,6 +39,25 @@ app = FastAPI(
 # Create all tables on startup if they do not exist
 models.Base.metadata.create_all(bind=engine)
 
+# Ensure default admin exists
+try:
+    from .database import SessionLocal
+    from .models import User, UserRole
+    from .auth import get_password_hash
+    with SessionLocal() as db:
+        if not db.query(User).filter(User.username == "admin").first():
+            db.add(User(
+                username="admin",
+                email="admin@school.com",
+                hashed_password=get_password_hash("admin123"),
+                role=UserRole.ADMIN,
+                is_active=True
+            ))
+            db.commit()
+except Exception as e:
+    pass
+
+
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
